@@ -33,6 +33,7 @@ export function VoiceBotButton() {
   });
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
+  const leadIdRef = useRef<string>('');
 
   const conversation = useConversation({
     onConnect: () => {
@@ -46,6 +47,7 @@ export function VoiceBotButton() {
     },
     onMessage: async (message: any) => {
       console.log('Message received:', message);
+      console.log('Current lead ID from ref:', leadIdRef.current);
 
       if (message.role === 'user' && message.message) {
         const newMessage = {
@@ -56,12 +58,21 @@ export function VoiceBotButton() {
         };
         setMessages(prev => [...prev, newMessage]);
 
-        if (leadId) {
-          await supabase.from('messages').insert({
-            lead_id: leadId,
+        if (leadIdRef.current) {
+          console.log('Attempting to insert user message with lead_id:', leadIdRef.current);
+          const { error } = await supabase.from('messages').insert({
+            lead_id: leadIdRef.current,
             role: 'user',
             text: message.message
           });
+          if (error) {
+            console.error('Error inserting user message:', error);
+            console.error('Lead ID used:', leadIdRef.current);
+          } else {
+            console.log('User message inserted successfully');
+          }
+        } else {
+          console.error('No lead ID available for user message');
         }
       } else if (message.role === 'agent' && message.message) {
         const newMessage = {
@@ -72,12 +83,21 @@ export function VoiceBotButton() {
         };
         setMessages(prev => [...prev, newMessage]);
 
-        if (leadId) {
-          await supabase.from('messages').insert({
-            lead_id: leadId,
+        if (leadIdRef.current) {
+          console.log('Attempting to insert agent message with lead_id:', leadIdRef.current);
+          const { error } = await supabase.from('messages').insert({
+            lead_id: leadIdRef.current,
             role: 'agent',
             text: message.message
           });
+          if (error) {
+            console.error('Error inserting agent message:', error);
+            console.error('Lead ID used:', leadIdRef.current);
+          } else {
+            console.log('Agent message inserted successfully');
+          }
+        } else {
+          console.error('No lead ID available for agent message');
         }
       }
     },
@@ -108,6 +128,14 @@ export function VoiceBotButton() {
     setIsLoading(true);
 
     try {
+      console.log('Creating lead with data:', {
+        company_name: formData.name,
+        project_name: formData.projectName,
+        contact_name: formData.personName,
+        contact_email: formData.email,
+        contact_phone: formData.telephone,
+      });
+
       const { data, error } = await supabase
         .from('leads')
         .insert({
@@ -121,17 +149,47 @@ export function VoiceBotButton() {
         .select()
         .maybeSingle();
 
-      if (error) throw error;
+      console.log('Lead insert result:', { data, error });
 
-      if (data) {
-        setLeadId(data.id);
-        setShowModal(false);
-        setShowVoiceBot(true);
-        await startVoiceCall(data.id);
+      if (error) {
+        console.error('Error creating lead:', error);
+        alert(`Failed to create lead: ${error.message}`);
+        throw error;
       }
+
+      if (!data || !data.id) {
+        console.error('No lead data returned after insert');
+        alert('Failed to create lead - no data returned');
+        throw new Error('Failed to create lead - no data returned');
+      }
+
+      console.log('Lead created successfully with ID:', data.id);
+
+      const { data: verifyData, error: verifyError } = await supabase
+        .from('leads')
+        .select('id, company_name')
+        .eq('id', data.id)
+        .maybeSingle();
+
+      console.log('Lead verification result:', { verifyData, verifyError });
+
+      if (verifyError || !verifyData) {
+        console.error('Lead verification failed - lead does not exist in database');
+        alert('Lead was created but cannot be verified. Please try again.');
+        throw new Error('Lead verification failed');
+      }
+
+      console.log('Lead verified successfully in database');
+      setLeadId(data.id);
+      leadIdRef.current = data.id;
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      setShowModal(false);
+      setShowVoiceBot(true);
+      await startVoiceCall(data.id);
     } catch (error) {
-      console.error('Error creating lead:', error);
-      alert('Failed to create lead. Please try again.');
+      console.error('Error in handleSubmit:', error);
     } finally {
       setIsLoading(false);
     }
@@ -139,6 +197,9 @@ export function VoiceBotButton() {
 
   const startVoiceCall = async (id: string) => {
     try {
+      console.log('Starting voice call with lead ID:', id);
+      console.log('leadIdRef.current is:', leadIdRef.current);
+
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioStreamRef.current = stream;
 
@@ -151,6 +212,8 @@ export function VoiceBotButton() {
           person_name: formData.personName,
         },
       });
+
+      console.log('Voice call started successfully');
     } catch (error) {
       console.error('Error starting voice call:', error);
       alert('Failed to start voice call. Please check microphone permissions.');
@@ -184,6 +247,8 @@ export function VoiceBotButton() {
 
     setShowVoiceBot(false);
     setMessages([]);
+    setLeadId('');
+    leadIdRef.current = '';
     setFormData({
       name: '',
       email: '',
